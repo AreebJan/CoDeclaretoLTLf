@@ -1,0 +1,38 @@
+{
+  "environment": ["regaddr", "pay", "reqc", "open"],
+  "system": ["skip", "ship", "cancel", "refund"],
+
+  "assumptions": [
+    {
+      "template": "precedence",
+      "activities": ["regaddr", "ship"]
+    },
+    {
+      "template": "responded_existence",
+      "activities": ["open", "regaddr"]
+    },
+    {
+      "template": "absence2",
+      "activities": ["pay"]
+    }
+  ],
+
+  "guarantees": [
+    {
+      "template": "neg_succession",
+      "activities": ["reqc", "pay"]
+    },
+    {
+      "template": "response",
+      "activities": ["reqc", "cancel", "refund"]
+    },
+    {
+      "template": "not_coexistence",
+      "activities": ["cancel", "refund"]
+    },
+    {
+      "template": "succession",
+      "activities": ["pay", "ship"]
+    }
+  ]
+}
