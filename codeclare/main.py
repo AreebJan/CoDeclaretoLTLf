@@ -8,38 +8,66 @@ from .contract_builder import build_contract
 from .tlsf_exporter import export_tlsf
 from .utils.strategy_utils import dot_to_pdf, display_pdf_in_colab
 
+
 def run_lydia_synthesis(tlsf_path: Path, output_dir: Path) -> Path:
     """
-    Run LydiaSyftPlus natively inside Colab (no Docker).
-    Assumes LydiaSyft was compiled in ./LydiaSyftPlus/build/bin/LydiaSyft.
+    Run LydiaSyft (or LydiaSyftEL) depending on which binary exists.
+    Automatically detects the environment (Mac / Colab / Docker).
     """
-    print("\n Running LydiaSyft synthesis locally \n")
+    print("\n Running LydiaSyft synthesis...\n")
 
-    binary = Path("LydiaSyft/build/bin/LydiaSyft")
-    if not binary.exists():
-        raise FileNotFoundError("❌ LydiaSyft binary not found at LydiaSyft/build/bin/LydiaSyft")
+    tlsf_abs = tlsf_path.resolve()
+    out_abs = output_dir.resolve()
+    strategy_path = out_abs / "strategy.dot"
 
-    cmd = [str(binary), "synthesis", "-f", str(tlsf_path)]
+    # Try local or Docker-based execution
+    lydiasyft_paths = [
+        "/content/LydiaSyftPlus/build/bin/LydiaSyft",
+        "/content/LydiaSyftPlus/build/bin/LydiaSyftEL",
+        "/LydiaSyft/build/bin/LydiaSyft",
+        "/LydiaSyft/build/bin/LydiaSyftEL",
+    ]
+    lydiasyft_bin = next((p for p in lydiasyft_paths if Path(p).exists()), None)
+
+    if not lydiasyft_bin:
+        raise FileNotFoundError(" No LydiaSyft or LydiaSyftEL binary found.")
+
+    # --- Construct the appropriate command ---
+    if lydiasyft_bin.endswith("LydiaSyft"):
+        cmd = [lydiasyft_bin, "synthesis", "-f", str(tlsf_abs)]
+    else:
+        # LydiaSyftEL expects --input-file, --partition-file, etc.
+        dummy_partition = out_abs / "dummy_partition.txt"
+        dummy_partition.write_text("i a\no b")  # minimal placeholder partition
+        cmd = [
+            lydiasyft_bin,
+            "-i", str(tlsf_abs),
+            "-p", str(dummy_partition),
+            "-s", "1",  # starting player: agent
+            "-g", "0",  # game solver: Emerson-Lei
+        ]
+
+    print(f"▶️ Running: {' '.join(cmd)}\n")
+
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
         print(result.stdout)
-        if "UNREALIZABLE" in result.stdout.upper():
-            print("❌ Specification is UNREALIZABLE")
-        elif "REALIZABLE" in result.stdout.upper():
-            print(" Specification is REALIZABLE")
-        else:
-            print(" Could not determine realizability status from output.")
+        print(result.stderr)
     except subprocess.CalledProcessError as e:
-        print(f" LydiaSyft synthesis failed (exit code {e.returncode})")
+        print(f" LydiaSyft synthesis failed (exit code {e.returncode}).")
         print(e.stderr)
         raise
 
-    # Locate strategy.dot
-    strategy_path = Path("LydiaSyft/build/strategy.dot")
-    if not strategy_path.exists():
-        raise FileNotFoundError(" No strategy .dot file produced by LydiaSyft.")
-    print(f" Strategy DOT file generated: {strategy_path}")
-    return strategy_path
+    # If strategy.dot was generated, copy to outputs
+    strategy_dot = Path("strategy.dot")
+    if strategy_dot.exists():
+        subprocess.run(["cp", str(strategy_dot), str(strategy_path)], check=False)
+        print(f" Copied strategy.dot → {strategy_path}")
+    else:
+        print(" No strategy.dot file found (possibly unrealizable).")
+
+    return strategy_path if strategy_path.exists() else None
+
 
 def main():
     ap = argparse.ArgumentParser(description="coDECLARE → LTLf → TLSF → LydiaSyft")
@@ -64,7 +92,7 @@ def main():
     ltlf_out = outputs_dir / f"{base}.ltlf"
     tlsf_out = outputs_dir / f"{base}.tlsf"
 
-# Step 2: Save only the .ltlf and .tlsf outputs
+    # Step 2: Save only the .ltlf and .tlsf outputs
     ltlf_out.write_text(result["contract_ltlf"])
     export_tlsf(result, tlsf_out, title=f"coDECLARE contract ({base})")
 
@@ -75,20 +103,17 @@ def main():
     # Step 3: Run LydiaSyft synthesis
     try:
         strategy_dot = run_lydia_synthesis(tlsf_out, outputs_dir)
-
-        # Step 4: Convert to PDF
-        pdf_path = dot_to_pdf(strategy_dot)
-
-        # Step 5: Display in Colab (optional)
-        if "COLAB_RELEASE_TAG" in os.environ:
-            display_pdf_in_colab(str(pdf_path))
+        if strategy_dot:
+            pdf_path = dot_to_pdf(strategy_dot)
+            if "COLAB_RELEASE_TAG" in os.environ:
+                display_pdf_in_colab(str(pdf_path))
+            else:
+                print(f" Strategy PDF ready at: {pdf_path}")
         else:
-            print(f"Strategy PDF ready at: {pdf_path}")
+            print(" No strategy file produced.")
 
-    except subprocess.CalledProcessError as e:
-        print(f" LydiaSyft synthesis failed with error code {e.returncode}")
     except Exception as e:
-        print(f" {e}")
+        print(f" Synthesis pipeline failed: {e}")
 
     print("\n Pipeline completed.")
 
